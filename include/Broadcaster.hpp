@@ -1,6 +1,9 @@
 #ifndef BROADCASTER_H
 #define BROADCASTER_H
 
+#include "Poco/Timer.h"
+#include "ProtooApi.hpp"
+#include "WebSocketClient.hpp"
 #include "mediasoupclient.hpp"
 #include "json.hpp"
 #include <chrono>
@@ -8,9 +11,7 @@
 #include <future>
 #include <mutex>
 #include <string>
-
-class Broadcaster : public
-                    mediasoupclient::SendTransport::Listener,
+class Broadcaster : public mediasoupclient::SendTransport::Listener,
                     mediasoupclient::RecvTransport::Listener,
                     mediasoupclient::Producer::Listener,
                     mediasoupclient::DataProducer::Listener,
@@ -89,17 +90,13 @@ public:
 	void OnTransportClose(mediasoupclient::DataProducer* dataProducer) override;
 
 public:
-	void Start(
-	  const std::string& baseUrl,
-	  bool enableAudio,
-	  bool useSimulcast,
-	  const nlohmann::json& routerRtpCapabilities,
-	  bool verifySsl = true);
+	void Start();
 	void Stop();
-
+	Broadcaster(std::shared_ptr<WebSocketClient> webSocket);
 	~Broadcaster();
 
 private:
+	ProtooApi protooApi;
 	mediasoupclient::Device device;
 	mediasoupclient::SendTransport* sendTransport{ nullptr };
 	mediasoupclient::RecvTransport* recvTransport{ nullptr };
@@ -112,13 +109,15 @@ private:
 
 	struct TimerKiller timerKiller;
 	bool verifySsl = true;
+	Poco::Timer updateTimer_;
 
 	std::future<void> OnConnectSendTransport(const nlohmann::json& dtlsParameters);
 	std::future<void> OnConnectRecvTransport(const nlohmann::json& dtlsParameters);
 
-	void CreateSendTransport(bool enableAudio, bool useSimulcast);
+	void CreateSendTransport();
 	void CreateRecvTransport();
 	void CreateDataConsumer();
+	void onTimer(Poco::Timer&);
 };
 
 #endif // STOKER_HPP

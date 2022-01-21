@@ -9,6 +9,7 @@ set(broadcaster_VERSION_MINOR 1)
 # C++ standard requirements.
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package(Poco REQUIRED Net NetSSL)
 
 message("\n=========== mediasoup-broadcaster-demo Build Configuration ===========\n")
 message(STATUS "LIBWEBRTC_INCLUDE_PATH : " ${LIBWEBRTC_INCLUDE_PATH})
@@ -69,6 +70,8 @@ target_sources(${PROJECT_NAME} PRIVATE
 	src/Broadcaster.cpp
 	src/main.cpp
 	src/MediaStreamTrackFactory.cpp
+	src/WebSocketClient.cpp
+	src/ProtooApi.cpp
 )
 
 # Private (implementation) header files.
@@ -89,6 +92,9 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 	${LIBWEBRTC_BINARY_PATH}/libwebrtc${CMAKE_STATIC_LIBRARY_SUFFIX}
 	cpr
 	mediasoupclient
+	X11
+	xcb
+	${Poco_LIBRARIES}
 	webrtc_broadcaster
 )
 

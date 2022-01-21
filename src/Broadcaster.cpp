@@ -18,6 +18,11 @@ Broadcaster::~Broadcaster()
 	this->Stop();
 }
 
+Broadcaster::Broadcaster(std::shared_ptr<WebSocketClient> webSocket)
+  : protooApi(webSocket), updateTimer_(0, 30 * 1000)
+{
+}
+
 void Broadcaster::OnTransportClose(mediasoupclient::Producer* /*producer*/)
 {
 	std::cout << "[INFO] Broadcaster::OnTransportClose()" << std::endl;
@@ -63,29 +68,12 @@ std::future<void> Broadcaster::OnConnectSendTransport(const json& dtlsParameters
 	/* clang-format off */
 	json body =
 	{
+		{ "transportId", this->sendTransport->GetId() },
 		{ "dtlsParameters", dtlsParameters }
 	};
 	/* clang-format on */
-
-	auto r = cpr::PostAsync(
-	           cpr::Url{ this->baseUrl + "/broadcasters/" + this->id + "/transports/" +
-	                     this->sendTransport->GetId() + "/connect" },
-	           cpr::Body{ body.dump() },
-	           cpr::Header{ { "Content-Type", "application/json" } },
-	           cpr::VerifySsl{ verifySsl })
-	           .get();
-
-	if (r.status_code == 200)
-	{
-		promise.set_value();
-	}
-	else
-	{
-		std::cerr << "[ERROR] unable to connect transport"
-		          << " [status code:" << r.status_code << ", body:\"" << r.text << "\"]" << std::endl;
-
-		promise.set_exception(std::make_exception_ptr(r.text));
-	}
+	this->protooApi.connectWebRtcTransport(body);
+	promise.set_value();
 
 	return promise.get_future();
 }
@@ -97,29 +85,12 @@ std::future<void> Broadcaster::OnConnectRecvTransport(const json& dtlsParameters
 	/* clang-format off */
 	json body =
 	{
+		{ "transportId", this->recvTransport->GetId() },
 		{ "dtlsParameters", dtlsParameters }
 	};
 	/* clang-format on */
-
-	auto r = cpr::PostAsync(
-	           cpr::Url{ this->baseUrl + "/broadcasters/" + this->id + "/transports/" +
-	                     this->recvTransport->GetId() + "/connect" },
-	           cpr::Body{ body.dump() },
-	           cpr::Header{ { "Content-Type", "application/json" } },
-	           cpr::VerifySsl{ verifySsl })
-	           .get();
-
-	if (r.status_code == 200)
-	{
-		promise.set_value();
-	}
-	else
-	{
-		std::cerr << "[ERROR] unable to connect transport"
-		          << " [status code:" << r.status_code << ", body:\"" << r.text << "\"]" << std::endl;
-
-		promise.set_exception(std::make_exception_ptr(r.text));
-	}
+	this->protooApi.connectWebRtcTransport(body);
+	promise.set_value();
 
 	return promise.get_future();
 }
@@ -159,38 +130,19 @@ std::future<std::string> Broadcaster::OnProduce(
 	/* clang-format off */
 	json body =
 	{
+		{ "transportId", this->sendTransport->GetId() },
 		{ "kind",          kind          },
 		{ "rtpParameters", rtpParameters }
 	};
 	/* clang-format on */
-
-	auto r = cpr::PostAsync(
-	           cpr::Url{ this->baseUrl + "/broadcasters/" + this->id + "/transports/" +
-	                     this->sendTransport->GetId() + "/producers" },
-	           cpr::Body{ body.dump() },
-	           cpr::Header{ { "Content-Type", "application/json" } },
-	           cpr::VerifySsl{ verifySsl })
-	           .get();
-
-	if (r.status_code == 200)
+	auto response = this->protooApi.produce(body);
+	auto it       = response.find("id");
+	if (it == response.end() || !it->is_string())
 	{
-		auto response = json::parse(r.text);
-
-		auto it = response.find("id");
-		if (it == response.end() || !it->is_string())
-		{
-			promise.set_exception(std::make_exception_ptr("'id' missing in response"));
-		}
-
-		promise.set_value((*it).get<std::string>());
+		promise.set_exception(std::make_exception_ptr("'id' missing in response"));
 	}
-	else
-	{
-		std::cerr << "[ERROR] unable to create producer"
-		          << " [status code:" << r.status_code << ", body:\"" << r.text << "\"]" << std::endl;
 
-		promise.set_exception(std::make_exception_ptr(r.text));
-	}
+	promise.set_value((*it).get<std::string>());
 
 	return promise.get_future();
 }
@@ -215,96 +167,46 @@ std::future<std::string> Broadcaster::OnProduceData(
 	/* clang-format off */
 	json body =
     {
+				{ "transportId", this->sendTransport->GetId() },
         { "label"                , label },
         { "protocol"             , protocol },
         { "sctpStreamParameters" , sctpStreamParameters }
 		// { "appData"				 , "someAppData" }
 	};
 	/* clang-format on */
-
-	auto r = cpr::PostAsync(
-	           cpr::Url{ this->baseUrl + "/broadcasters/" + this->id + "/transports/" +
-	                     this->sendTransport->GetId() + "/produce/data" },
-	           cpr::Body{ body.dump() },
-	           cpr::Header{ { "Content-Type", "application/json" } },
-	           cpr::VerifySsl{ verifySsl })
-	           .get();
-
-	if (r.status_code == 200)
+	auto response = this->protooApi.produceData(body);
+	auto it       = response.find("id");
+	if (it == response.end() || !it->is_string())
 	{
-		auto response = json::parse(r.text);
-
-		auto it = response.find("id");
-		if (it == response.end() || !it->is_string())
-		{
-			promise.set_exception(std::make_exception_ptr("'id' missing in response"));
-		}
-		else
-		{
-			auto dataProducerId = (*it).get<std::string>();
-			promise.set_value(dataProducerId);
-		}
+		promise.set_exception(std::make_exception_ptr("'id' missing in response"));
 	}
-	else
-	{
-		std::cerr << "[ERROR] unable to create data producer"
-		          << " [status code:" << r.status_code << ", body:\"" << r.text << "\"]" << std::endl;
 
-		promise.set_exception(std::make_exception_ptr(r.text));
-	}
+	promise.set_value((*it).get<std::string>());
 
 	return promise.get_future();
 }
 
-void Broadcaster::Start(
-  const std::string& baseUrl,
-  bool enableAudio,
-  bool useSimulcast,
-  const json& routerRtpCapabilities,
-  bool verifySsl)
+void Broadcaster::Start()
 {
+	std::cout << "[INFO] creating Broadcaster..." << std::endl;
+	json routerRtpCapabilities = this->protooApi.getRouterRtpCapabilities();
+	std::cout << "routerRtpCapabilities: " << routerRtpCapabilities.dump() << std::endl;
 	std::cout << "[INFO] Broadcaster::Start()" << std::endl;
-
-	this->baseUrl   = baseUrl;
-	this->verifySsl = verifySsl;
 
 	// Load the device.
 	this->device.Load(routerRtpCapabilities);
+	json sctpCapabilities = this->device.GetSctpCapabilities();
+	std::cout << "[INFO] creating mediasoup send WebRtcTransport..." << std::endl;
 
-	std::cout << "[INFO] creating Broadcaster..." << std::endl;
-
-	/* clang-format off */
-	json body =
-	{
-		{ "id",          this->id          },
-		{ "displayName", "broadcaster"     },
-		{ "device",
-			{
-				{ "name",    "libmediasoupclient"       },
-				{ "version", mediasoupclient::Version() }
-			}
-		},
-		{ "rtpCapabilities", this->device.GetRtpCapabilities() }
-	};
-	/* clang-format on */
-
-	auto r = cpr::PostAsync(
-	           cpr::Url{ this->baseUrl + "/broadcasters" },
-	           cpr::Body{ body.dump() },
-	           cpr::Header{ { "Content-Type", "application/json" } },
-	           cpr::VerifySsl{ verifySsl })
-	           .get();
-
-	if (r.status_code != 200)
-	{
-		std::cerr << "[ERROR] unable to create Broadcaster"
-		          << " [status code:" << r.status_code << ", body:\"" << r.text << "\"]" << std::endl;
-
-		return;
-	}
-
-	this->CreateSendTransport(enableAudio, useSimulcast);
+	this->CreateSendTransport();
 	this->CreateRecvTransport();
+	updateTimer_.start(Poco::TimerCallback<Broadcaster>(*this, &Broadcaster::onTimer));
+}
+
+void Broadcaster::onTimer(Poco::Timer&)
+{
+	json body = { { "transportId", this->sendTransport->GetId() } };
+	this->protooApi.getTransportStats(body);
 }
 
 void Broadcaster::CreateDataConsumer()
@@ -352,83 +254,37 @@ void Broadcaster::CreateDataConsumer()
 	  this, dataConsumerId, dataProducerId, streamId, "chat", "", nlohmann::json());
 }
 
-void Broadcaster::CreateSendTransport(bool enableAudio, bool useSimulcast)
+void Broadcaster::CreateSendTransport()
 {
-	std::cout << "[INFO] creating mediasoup send WebRtcTransport..." << std::endl;
-
-	json sctpCapabilities = this->device.GetSctpCapabilities();
-	/* clang-format off */
-	json body =
-	{
-		{ "type",    "webrtc" },
-		{ "rtcpMux", true     },
-		{ "sctpCapabilities", sctpCapabilities }
-	};
-	/* clang-format on */
-
-	auto r = cpr::PostAsync(
-	           cpr::Url{ this->baseUrl + "/broadcasters/" + this->id + "/transports" },
-	           cpr::Body{ body.dump() },
-	           cpr::Header{ { "Content-Type", "application/json" } },
-	           cpr::VerifySsl{ verifySsl })
-	           .get();
-
-	if (r.status_code != 200)
-	{
-		std::cerr << "[ERROR] unable to create send mediasoup WebRtcTransport"
-		          << " [status code:" << r.status_code << ", body:\"" << r.text << "\"]" << std::endl;
-
-		return;
-	}
-
-	auto response = json::parse(r.text);
-
-	if (response.find("id") == response.end())
-	{
-		std::cerr << "[ERROR] 'id' missing in response" << std::endl;
-
-		return;
-	}
-	else if (response.find("iceParameters") == response.end())
-	{
-		std::cerr << "[ERROR] 'iceParametersd' missing in response" << std::endl;
-
-		return;
-	}
-	else if (response.find("iceCandidates") == response.end())
-	{
-		std::cerr << "[ERROR] 'iceCandidates' missing in response" << std::endl;
-
-		return;
-	}
-	else if (response.find("dtlsParameters") == response.end())
-	{
-		std::cerr << "[ERROR] 'dtlsParameters' missing in response" << std::endl;
-
-		return;
-	}
-	else if (response.find("sctpParameters") == response.end())
-	{
-		std::cerr << "[ERROR] 'sctpParameters' missing in response" << std::endl;
-
-		return;
-	}
-
 	std::cout << "[INFO] creating SendTransport..." << std::endl;
+	json sctpCapabilities = this->device.GetSctpCapabilities();
 
-	auto sendTransportId = response["id"].get<std::string>();
+	nlohmann::json data          = nlohmann::json::object();
+	data["forceTcp"]             = false;
+	data["producing"]            = true;
+	data["consuming"]            = false;
+	data["sctpCapabilities"]     = sctpCapabilities;
+	nlohmann::json transportInfo = this->protooApi.createWebRtcTransport(data);
+	std::cout << "transportInfo: " << transportInfo.dump() << std::endl;
+	auto sendTransportId = transportInfo["id"].get<std::string>();
 
 	this->sendTransport = this->device.CreateSendTransport(
 	  this,
 	  sendTransportId,
-	  response["iceParameters"],
-	  response["iceCandidates"],
-	  response["dtlsParameters"],
-	  response["sctpParameters"]);
-
+	  transportInfo["iceParameters"],
+	  transportInfo["iceCandidates"],
+	  transportInfo["dtlsParameters"],
+	  transportInfo["sctpParameters"]);
+	json rtpCapabilities = this->device.GetRtpCapabilities();
+	json device = { { "flag", "chrome" }, { "name", "Chrome" }, { "version", "96.0.4664.110" } };
+	json body   = { { "displayName", "Pincurchin" },
+                { "device", device },
+                { "rtpCapabilities", rtpCapabilities },
+                { "sctpCapabilities", sctpCapabilities } };
+	this->protooApi.join(body);
 	///////////////////////// Create Audio Producer //////////////////////////
 
-	if (enableAudio && this->device.CanProduce("audio"))
+	if (this->device.CanProduce("audio"))
 	{
 		auto audioTrack = createAudioTrack(std::to_string(rtc::CreateRandomId()));
 
@@ -452,7 +308,7 @@ void Broadcaster::CreateSendTransport(bool enableAudio, bool useSimulcast)
 	{
 		auto videoTrack = createSquaresVideoTrack(std::to_string(rtc::CreateRandomId()));
 
-		if (useSimulcast)
+		if (true)
 		{
 			std::vector<webrtc::RtpEncodingParameters> encodings;
 			encodings.emplace_back(webrtc::RtpEncodingParameters());
@@ -490,8 +346,7 @@ void Broadcaster::CreateSendTransport(bool enableAudio, bool useSimulcast)
 			this->dataProducer->Send(dataBuffer);
 			run = timerKiller.WaitFor(std::chrono::seconds(intervalSeconds));
 		}
-	})
-	  .detach();
+	}).detach();
 }
 
 void Broadcaster::CreateRecvTransport()
@@ -499,79 +354,29 @@ void Broadcaster::CreateRecvTransport()
 	std::cout << "[INFO] creating mediasoup recv WebRtcTransport..." << std::endl;
 
 	json sctpCapabilities = this->device.GetSctpCapabilities();
-	/* clang-format off */
-	json body =
-	{
-		{ "type",    "webrtc" },
-		{ "rtcpMux", true     },
-		{ "sctpCapabilities", sctpCapabilities }
-	};
-	/* clang-format on */
-
-	// create server transport
-	auto r = cpr::PostAsync(
-	           cpr::Url{ this->baseUrl + "/broadcasters/" + this->id + "/transports" },
-	           cpr::Body{ body.dump() },
-	           cpr::Header{ { "Content-Type", "application/json" } },
-	           cpr::VerifySsl{ verifySsl })
-	           .get();
-
-	if (r.status_code != 200)
-	{
-		std::cerr << "[ERROR] unable to create mediasoup recv WebRtcTransport"
-		          << " [status code:" << r.status_code << ", body:\"" << r.text << "\"]" << std::endl;
-
-		return;
-	}
-
-	auto response = json::parse(r.text);
-
-	if (response.find("id") == response.end())
-	{
-		std::cerr << "[ERROR] 'id' missing in response" << std::endl;
-
-		return;
-	}
-	else if (response.find("iceParameters") == response.end())
-	{
-		std::cerr << "[ERROR] 'iceParameters' missing in response" << std::endl;
-
-		return;
-	}
-	else if (response.find("iceCandidates") == response.end())
-	{
-		std::cerr << "[ERROR] 'iceCandidates' missing in response" << std::endl;
-
-		return;
-	}
-	else if (response.find("dtlsParameters") == response.end())
-	{
-		std::cerr << "[ERROR] 'dtlsParameters' missing in response" << std::endl;
-
-		return;
-	}
-	else if (response.find("sctpParameters") == response.end())
-	{
-		std::cerr << "[ERROR] 'sctpParameters' missing in response" << std::endl;
-
-		return;
-	}
-
-	auto recvTransportId = response["id"].get<std::string>();
+	std::cout << "[INFO] creating RecvTransport..." << std::endl;
+	nlohmann::json data          = nlohmann::json::object();
+	data["forceTcp"]             = false;
+	data["producing"]            = false;
+	data["consuming"]            = true;
+	data["sctpCapabilities"]     = sctpCapabilities;
+	nlohmann::json transportInfo = this->protooApi.createWebRtcTransport(data);
+	std::cout << "transportInfo: " << transportInfo.dump() << std::endl;
+	auto recvTransportId = transportInfo["id"].get<std::string>();
 
 	std::cout << "[INFO] creating RecvTransport..." << std::endl;
 
-	auto sctpParameters = response["sctpParameters"];
+	auto sctpParameters = transportInfo["sctpParameters"];
 
 	this->recvTransport = this->device.CreateRecvTransport(
 	  this,
 	  recvTransportId,
-	  response["iceParameters"],
-	  response["iceCandidates"],
-	  response["dtlsParameters"],
+	  transportInfo["iceParameters"],
+	  transportInfo["iceCandidates"],
+	  transportInfo["dtlsParameters"],
 	  sctpParameters);
 
-	this->CreateDataConsumer();
+	// this->CreateDataConsumer();
 }
 
 void Broadcaster::OnMessage(mediasoupclient::DataConsumer* dataConsumer, const webrtc::DataBuffer& buffer)
