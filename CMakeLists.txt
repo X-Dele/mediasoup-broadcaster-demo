@@ -11,6 +11,10 @@ set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Poco REQUIRED Net NetSSL)
 
+find_package (PkgConfig REQUIRED)
+pkg_check_modules (GTK3 REQUIRED gtk+-3.0)
+pkg_check_modules (GLIB REQUIRED glib-2.0)
+
 message("\n=========== mediasoup-broadcaster-demo Build Configuration ===========\n")
 message(STATUS "LIBWEBRTC_INCLUDE_PATH : " ${LIBWEBRTC_INCLUDE_PATH})
 message(STATUS "LIBWEBRTC_BINARY_PATH  : " ${LIBWEBRTC_BINARY_PATH})
@@ -53,16 +57,16 @@ include(FetchContent)
 message(STATUS "\nFetching mediasoupclient...\n")
 FetchContent_Declare(
   mediasoupclient
-  GIT_REPOSITORY https://github.com/versatica/libmediasoupclient.git
-  GIT_TAG v3
+  # GIT_REPOSITORY https://github.com/versatica/libmediasoupclient.git
+  # GIT_TAG v3
 )
 FetchContent_MakeAvailable(mediasoupclient)
 
 message(STATUS "Fetching cpr...\n")
 FetchContent_Declare(
 	cpr
-	GIT_REPOSITORY https://github.com/whoshuu/cpr
-	GIT_TAG 1.4.0
+	# GIT_REPOSITORY https://github.com/whoshuu/cpr
+	# GIT_TAG 1.4.0
 )
 FetchContent_MakeAvailable(cpr)
 
@@ -72,6 +76,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 	src/MediaStreamTrackFactory.cpp
 	src/WebSocketClient.cpp
 	src/ProtooApi.cpp
+	src/wnd.cc
 )
 
 # Private (implementation) header files.
@@ -85,6 +90,10 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 	${mediasoupclient_SOURCE_DIR}/include
 	${cpr_SOURCE_DIR}/include
 	"${PROJECT_SOURCE_DIR}/deps/libwebrtc"
+	${GTK3_INCLUDE_DIRS}
+	${GLIB_INCLUDE_DIRS}
+	"${LIBWEBRTC_INCLUDE_PATH}/third_party/libyuv/include"
+
 )
 
 # Public (interface) dependencies.
@@ -95,6 +104,9 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 	X11
 	xcb
 	${Poco_LIBRARIES}
+	${GLIB_LIBRARIES}
+
 	webrtc_broadcaster
+	${GTK3_LIBRARIES}
 )
 

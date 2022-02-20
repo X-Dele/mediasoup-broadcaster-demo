@@ -1,17 +1,20 @@
 ﻿#include "Broadcaster.hpp"
 
-#include "ProtooApi.hpp"
-#include "WebSocketClient.hpp"
-#include "mediasoupclient.hpp"
-#include <cpr/cpr.h>
-#include <csignal>
-#include <cstdlib>
-#include <iostream>
-#include <string>
-
 #include "Poco/Net/AcceptCertificateHandler.h"
 #include "Poco/Net/SSLManager.h"
 #include "Poco/SharedPtr.h"
+#include "ProtooApi.hpp"
+#include "WebSocketClient.hpp"
+#include "mediasoupclient.hpp"
+#include "wnd.h"
+#include <cpr/cpr.h>
+#include <csignal>
+#include <cstdlib>
+#include <glib.h>
+#include <gtk/gtk.h>
+#include <iostream>
+#include <stdio.h>
+#include <string>
 
 using Poco::Net::Context;
 
@@ -37,8 +40,12 @@ void initializeSSL()
 	Poco::Net::SSLManager::instance().initializeClient(0, pCert, pContext);
 }
 
-int main(int /*argc*/, char* /*argv*/[])
+int main(int argc, char* argv[])
 {
+	gtk_init(&argc, &argv);
+	std::shared_ptr<GtkMainWnd> wnd =
+	  std::make_shared<GtkMainWnd>("192.168.43.250", 4443, false, false);
+	wnd->Create();
 	initializeSSL();
 	// Register signal SIGINT and signal handler.
 	signal(SIGINT, signalHandler);
@@ -58,16 +65,17 @@ int main(int /*argc*/, char* /*argv*/[])
 
 	std::cout << "[INFO] welcome to mediasoup broadcaster app!\n" << std::endl;
 
-	Broadcaster broadcaster(socket);
+	Broadcaster broadcaster(socket, wnd);
 
 	broadcaster.Start();
-
+	gtk_main();
 	std::cout << "[INFO] press Ctrl+C or Cmd+C to leave..." << std::endl;
 
 	while (true)
 	{
 		std::cin.get();
 	}
+	wnd->Destroy();
 
 	return 0;
 }

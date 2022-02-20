@@ -18,9 +18,29 @@ Broadcaster::~Broadcaster()
 	this->Stop();
 }
 
-Broadcaster::Broadcaster(std::shared_ptr<WebSocketClient> webSocket)
-  : protooApi(webSocket), updateTimer_(0, 30 * 1000)
+Broadcaster::Broadcaster(std::shared_ptr<WebSocketClient> webSocket, std::shared_ptr<MainWindow> window)
+  : protooApi(webSocket), window(window), updateTimer_(0, 30 * 1000)
 {
+	protooApi.addRequestHandler(
+	  "newConsumer", std::bind(&Broadcaster::onNewConsumer, this, std::placeholders::_1));
+}
+
+void Broadcaster::onNewConsumer(const nlohmann::json& data)
+{
+	std::string id               = data["id"];
+	std::string producerId       = data["producerId"];
+	std::string kind             = data["kind"];
+	nlohmann::json rtpParameters = data["rtpParameters"];
+
+	nlohmann::json appData = data["appData"];
+
+	auto* consumer = this->recvTransport->Consume(this, id, producerId, kind, &rtpParameters, appData);
+	if (kind == "video")
+	{
+		auto* videoTrack = static_cast<webrtc::VideoTrackInterface*>(consumer->GetTrack());
+		this->window->StopRemoteRenderer();
+		this->window->StartRemoteRenderer(videoTrack);
+	}
 }
 
 void Broadcaster::OnTransportClose(mediasoupclient::Producer* /*producer*/)
@@ -29,6 +49,11 @@ void Broadcaster::OnTransportClose(mediasoupclient::Producer* /*producer*/)
 }
 
 void Broadcaster::OnTransportClose(mediasoupclient::DataProducer* /*dataProducer*/)
+{
+	std::cout << "[INFO] Broadcaster::OnTransportClose()" << std::endl;
+}
+
+void Broadcaster::OnTransportClose(mediasoupclient::Consumer* /*dataProducer*/)
 {
 	std::cout << "[INFO] Broadcaster::OnTransportClose()" << std::endl;
 }
@@ -72,7 +97,7 @@ std::future<void> Broadcaster::OnConnectSendTransport(const json& dtlsParameters
 		{ "dtlsParameters", dtlsParameters }
 	};
 	/* clang-format on */
-	this->protooApi.connectWebRtcTransport(body);
+	this->protooApi.invoke("connectWebRtcTransport", body);
 	promise.set_value();
 
 	return promise.get_future();
@@ -89,7 +114,7 @@ std::future<void> Broadcaster::OnConnectRecvTransport(const json& dtlsParameters
 		{ "dtlsParameters", dtlsParameters }
 	};
 	/* clang-format on */
-	this->protooApi.connectWebRtcTransport(body);
+	this->protooApi.invoke("connectWebRtcTransport", body);
 	promise.set_value();
 
 	return promise.get_future();
@@ -135,7 +160,7 @@ std::future<std::string> Broadcaster::OnProduce(
 		{ "rtpParameters", rtpParameters }
 	};
 	/* clang-format on */
-	auto response = this->protooApi.produce(body);
+	auto response = this->protooApi.invoke("produce", body);
 	auto it       = response.find("id");
 	if (it == response.end() || !it->is_string())
 	{
@@ -174,7 +199,7 @@ std::future<std::string> Broadcaster::OnProduceData(
 		// { "appData"				 , "someAppData" }
 	};
 	/* clang-format on */
-	auto response = this->protooApi.produceData(body);
+	auto response = this->protooApi.invoke("produceData", body);
 	auto it       = response.find("id");
 	if (it == response.end() || !it->is_string())
 	{
@@ -189,7 +214,7 @@ std::future<std::string> Broadcaster::OnProduceData(
 void Broadcaster::Start()
 {
 	std::cout << "[INFO] creating Broadcaster..." << std::endl;
-	json routerRtpCapabilities = this->protooApi.getRouterRtpCapabilities();
+	json routerRtpCapabilities = this->protooApi.invoke("getRouterRtpCapabilities");
 	std::cout << "routerRtpCapabilities: " << routerRtpCapabilities.dump() << std::endl;
 	std::cout << "[INFO] Broadcaster::Start()" << std::endl;
 
@@ -206,7 +231,7 @@ void Broadcaster::Start()
 void Broadcaster::onTimer(Poco::Timer&)
 {
 	json body = { { "transportId", this->sendTransport->GetId() } };
-	this->protooApi.getTransportStats(body);
+	this->protooApi.invoke("getTransportStats", body);
 }
 
 void Broadcaster::CreateDataConsumer()
@@ -220,34 +245,16 @@ void Broadcaster::CreateDataConsumer()
 	};
 	/* clang-format on */
 	// create server data consumer
-	auto r = cpr::PostAsync(
-	           cpr::Url{ this->baseUrl + "/broadcasters/" + this->id + "/transports/" +
-	                     this->recvTransport->GetId() + "/consume/data" },
-	           cpr::Body{ body.dump() },
-	           cpr::Header{ { "Content-Type", "application/json" } },
-	           cpr::VerifySsl{ verifySsl })
-	           .get();
-	if (r.status_code != 200)
-	{
-		std::cerr << "[ERROR] server unable to consume mediasoup recv WebRtcTransport"
-		          << " [status code:" << r.status_code << ", body:\"" << r.text << "\"]" << std::endl;
-		return;
-	}
+	nlohmann::json dataInfo = this->protooApi.invoke("newDataConsumer", body);
 
-	auto response = json::parse(r.text);
-	if (response.find("id") == response.end())
-	{
-		std::cerr << "[ERROR] 'id' missing in response" << std::endl;
-		return;
-	}
-	auto dataConsumerId = response["id"].get<std::string>();
+	auto dataConsumerId = dataInfo["id"].get<std::string>();
 
-	if (response.find("streamId") == response.end())
+	if (dataInfo.find("streamId") == dataInfo.end())
 	{
-		std::cerr << "[ERROR] 'streamId' missing in response" << std::endl;
+		std::cerr << "[ERROR] 'streamId' missing in dataInfo" << std::endl;
 		return;
 	}
-	auto streamId = response["streamId"].get<uint16_t>();
+	auto streamId = dataInfo["streamId"].get<uint16_t>();
 
 	// Create client consumer.
 	this->dataConsumer = this->recvTransport->ConsumeData(
@@ -264,7 +271,7 @@ void Broadcaster::CreateSendTransport()
 	data["producing"]            = true;
 	data["consuming"]            = false;
 	data["sctpCapabilities"]     = sctpCapabilities;
-	nlohmann::json transportInfo = this->protooApi.createWebRtcTransport(data);
+	nlohmann::json transportInfo = this->protooApi.invoke("createWebRtcTransport", data);
 	std::cout << "transportInfo: " << transportInfo.dump() << std::endl;
 	auto sendTransportId = transportInfo["id"].get<std::string>();
 
@@ -281,7 +288,7 @@ void Broadcaster::CreateSendTransport()
                 { "device", device },
                 { "rtpCapabilities", rtpCapabilities },
                 { "sctpCapabilities", sctpCapabilities } };
-	this->protooApi.join(body);
+	this->protooApi.invoke("join", body);
 	///////////////////////// Create Audio Producer //////////////////////////
 
 	if (this->device.CanProduce("audio"))
@@ -307,7 +314,7 @@ void Broadcaster::CreateSendTransport()
 	if (this->device.CanProduce("video"))
 	{
 		auto videoTrack = createSquaresVideoTrack(std::to_string(rtc::CreateRandomId()));
-
+		this->window->StartLocalRenderer(videoTrack);
 		if (true)
 		{
 			std::vector<webrtc::RtpEncodingParameters> encodings;
@@ -360,7 +367,7 @@ void Broadcaster::CreateRecvTransport()
 	data["producing"]            = false;
 	data["consuming"]            = true;
 	data["sctpCapabilities"]     = sctpCapabilities;
-	nlohmann::json transportInfo = this->protooApi.createWebRtcTransport(data);
+	nlohmann::json transportInfo = this->protooApi.invoke("createWebRtcTransport", data);
 	std::cout << "transportInfo: " << transportInfo.dump() << std::endl;
 	auto recvTransportId = transportInfo["id"].get<std::string>();
 
@@ -414,10 +421,12 @@ void Broadcaster::OnOpen(mediasoupclient::DataProducer* /*dataProducer*/)
 {
 	std::cout << "[INFO] Broadcaster::OnOpen()" << std::endl;
 }
+
 void Broadcaster::OnClose(mediasoupclient::DataProducer* /*dataProducer*/)
 {
 	std::cout << "[INFO] Broadcaster::OnClose()" << std::endl;
 }
+
 void Broadcaster::OnBufferedAmountChange(mediasoupclient::DataProducer* /*dataProducer*/, uint64_t /*size*/)
 {
 	std::cout << "[INFO] Broadcaster::OnBufferedAmountChange()" << std::endl;

@@ -4,6 +4,7 @@
 #include "Poco/Timer.h"
 #include "ProtooApi.hpp"
 #include "WebSocketClient.hpp"
+#include "examples/peerconnection/client/main_wnd.h"
 #include "mediasoupclient.hpp"
 #include "json.hpp"
 #include <chrono>
@@ -14,6 +15,7 @@
 class Broadcaster : public mediasoupclient::SendTransport::Listener,
                     mediasoupclient::RecvTransport::Listener,
                     mediasoupclient::Producer::Listener,
+                    mediasoupclient::Consumer::Listener,
                     mediasoupclient::DataProducer::Listener,
                     mediasoupclient::DataConsumer::Listener
 {
@@ -90,13 +92,17 @@ public:
 	void OnTransportClose(mediasoupclient::DataProducer* dataProducer) override;
 
 public:
+	void OnTransportClose(mediasoupclient::Consumer* consumer) override;
+
+public:
 	void Start();
 	void Stop();
-	Broadcaster(std::shared_ptr<WebSocketClient> webSocket);
+	Broadcaster(std::shared_ptr<WebSocketClient> webSocket, std::shared_ptr<MainWindow> window);
 	~Broadcaster();
 
 private:
 	ProtooApi protooApi;
+	std::shared_ptr<MainWindow> window;
 	mediasoupclient::Device device;
 	mediasoupclient::SendTransport* sendTransport{ nullptr };
 	mediasoupclient::RecvTransport* recvTransport{ nullptr };
@@ -104,6 +110,7 @@ private:
 	mediasoupclient::DataConsumer* dataConsumer{ nullptr };
 
 	std::string id = std::to_string(rtc::CreateRandomId());
+	void onNewConsumer(const nlohmann::json& data);
 	std::string baseUrl;
 	std::thread sendDataThread;
 

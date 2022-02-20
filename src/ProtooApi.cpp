@@ -7,39 +7,9 @@ ProtooApi::ProtooApi(std::shared_ptr<WebSocketClient> webSocket) : webSocket(web
 	this->webSocket->addListener(this);
 }
 
-nlohmann::json ProtooApi::getRouterRtpCapabilities()
+nlohmann::json ProtooApi::invoke(std::string method, const nlohmann::json& data)
 {
-	return sendAndWaitResponse("getRouterRtpCapabilities", nlohmann::json::object());
-}
-
-nlohmann::json ProtooApi::createWebRtcTransport(const nlohmann::json& data)
-{
-	return sendAndWaitResponse("createWebRtcTransport", data);
-}
-
-nlohmann::json ProtooApi::connectWebRtcTransport(const nlohmann::json& data)
-{
-	return sendAndWaitResponse("connectWebRtcTransport", data);
-}
-
-nlohmann::json ProtooApi::produce(const nlohmann::json& data)
-{
-	return sendAndWaitResponse("produce", data);
-}
-
-nlohmann::json ProtooApi::produceData(const nlohmann::json& data)
-{
-	return sendAndWaitResponse("produceData", data);
-}
-
-nlohmann::json ProtooApi::join(const nlohmann::json& data)
-{
-	return sendAndWaitResponse("join", data);
-}
-
-nlohmann::json ProtooApi::getTransportStats(const nlohmann::json& data)
-{
-	return sendAndWaitResponse("getTransportStats", data);
+	return sendAndWaitResponse(method, data);
 }
 
 nlohmann::json ProtooApi::createRequest(const std::string& method, const nlohmann::json& data)
@@ -86,17 +56,52 @@ void ProtooApi::onReceive(const std::string& message)
 	{
 		return;
 	}
-	nlohmann::json response = nlohmann::json::parse(message);
-	auto it                 = response.find("response");
-	if (it == response.end())
+	nlohmann::json messageJson = nlohmann::json::parse(message);
+	auto responseIt            = messageJson.find("response");
+	if (responseIt != messageJson.end())
 	{
-		return;
+		uint32_t response_id = messageJson["id"];
+		if (this->handlers.find(response_id) == this->handlers.end())
+		{
+			return;
+		}
+		this->handlers[response_id](messageJson);
+		this->handlers.erase(response_id);
 	}
-	uint32_t response_id = response["id"];
-	if (this->handlers.find(response_id) == this->handlers.end())
+
+	auto requestIt = messageJson.find("request");
+	if (requestIt != messageJson.end())
 	{
-		return;
+		std::string method = messageJson["method"];
+		if (this->requestHandlers.find(method) == this->requestHandlers.end())
+		{
+			return;
+		}
+		uint32_t request_id = messageJson["id"];
+		this->requestHandlers[method](messageJson["data"]);
+		sendResponse(request_id);
 	}
-	this->handlers[response_id](response);
-	this->handlers.erase(response_id);
+}
+
+void ProtooApi::sendResponse(const uint32_t& request_id)
+{
+	nlohmann::json response = createResponse(request_id);
+	this->webSocket->send(response.dump());
+}
+
+nlohmann::json ProtooApi::createResponse(const uint32_t& request_id)
+{
+	nlohmann::json response;
+	response["response"] = true;
+
+	response["id"]   = request_id;
+	response["ok"]   = true;
+	response["data"] = nlohmann::json::object();
+	return response;
+}
+
+void ProtooApi::addRequestHandler(
+  const std::string& method, const std::function<void(nlohmann::json)>& handler)
+{
+	this->requestHandlers.emplace(method, handler);
 }
